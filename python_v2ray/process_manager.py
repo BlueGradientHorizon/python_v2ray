@@ -1,8 +1,6 @@
 import abc
 import os
 import subprocess
-import sys
-import tempfile
 from pathlib import Path
 from typing import List, Optional
 import logging
@@ -23,19 +21,15 @@ class BaseProcessManager(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def _get_start_command(self) -> List[str]:
+        pass
+
+    @abc.abstractmethod
     def _create_config(self) -> None:
         pass
 
     @abc.abstractmethod
-    def _get_start_command(self) -> List[str]:
-        pass
-
     def _cleanup_config(self) -> None:
-        if hasattr(self, "debug_mode") and self.debug_mode:
-            logging.info(
-                f"[DEBUG MODE] Xray temporary config file kept at: {self._config_file_path}"
-            )
-            return
         if self._config_file_path and os.path.exists(self._config_file_path):
             try:
                 os.remove(self._config_file_path)
@@ -75,11 +69,11 @@ class BaseProcessManager(abc.ABC):
 
                 if stdout_data:
                     logging.error(
-                        f"--- CAPTURED XRAY STDOUT ---\n{stdout_data.strip()}\n--------------------------"
+                        f"--- CAPTURED XRAY STDOUT ---\n{stdout_data.strip()}\n" + "-" * 26
                     )
                 if stderr_data:
                     logging.error(
-                        f"--- CAPTURED XRAY STDERR ---\n{stderr_data.strip()}\n----------------------------"
+                        f"--- CAPTURED XRAY STDERR ---\n{stderr_data.strip()}\n" + "-" * 26
                     )
 
                 self.process = None
@@ -99,18 +93,19 @@ class BaseProcessManager(abc.ABC):
     def stop(self) -> None:
         if not self.is_running():
             return
-        logging.info(
-            f"Stopping {self.__class__.__name__} with PID: {self.process.pid}..."
-        )
-        try:
-            self.process.terminate()
-            self.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            logging.warning(f"{self.__class__.__name__} was killed forcefully.")
-        finally:
-            self.process = None
-            self._cleanup_config()  # Cleanup happens in __exit__ or here
+        if self.process:
+            logging.info(
+                f"Stopping {self.__class__.__name__} with PID: {self.process.pid}..."
+            )
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                logging.warning(f"{self.__class__.__name__} was killed forcefully.")
+            finally:
+                self.process = None
+        self._cleanup_config()  # Cleanup happens in __exit__ or here
 
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None

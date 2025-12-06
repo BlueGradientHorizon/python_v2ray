@@ -9,7 +9,7 @@ from pathlib import Path # NEW: Import Path for cleaner path handling
 # * This ensures the script can find our local library files
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from python_v2ray.core import XrayCore # Keep for XrayCore management in the demo
+from python_v2ray.xray_core import XrayCore # Keep for XrayCore management in the demo
 from python_v2ray.config_parser import parse_uri, XrayConfigBuilder, ConfigParams # NEW: Import ConfigParams
 from python_v2ray.tester import ConnectionTester # NEW: Import ConnectionTester for unified testing
 

@@ -9,7 +9,7 @@ import sys
 # * It adds the parent directory (the project root) to Python's path.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from python_v2ray.core import XrayCore
+from python_v2ray.xray_core import XrayCore
 from python_v2ray.config_parser import XrayConfigBuilder
 def main():
     """

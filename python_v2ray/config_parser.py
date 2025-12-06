@@ -3,7 +3,7 @@ import json
 import base64
 import re
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Any, Optional, List, Union
 import logging
 import requests
@@ -169,12 +169,13 @@ def _parse_vless(
 
     security = params.get("security", "none")
     pbk = params.get("pbk", "")
+    sid = params.get("sid", "")
+    spx = params.get("spx", "")
     if security == "reality" and not pbk:
         logging.warning(
             f"REALITY config '{common['display_tag']}' is missing public key (pbk). Skipping."
         )
         return None
-
 
     network_type = params.get("type", "tcp")
     path = params.get("path", "")
@@ -189,6 +190,8 @@ def _parse_vless(
         id=parsed_url.username or "",
         security=security,
         pbk=pbk,
+        sid=sid,
+        spx=spx,
         network=network_type,
         header_type=params.get("headerType", "none"),
         host=host,
@@ -211,6 +214,8 @@ def _parse_trojan(
 
     security = params.get("security", "tls")
     pbk = params.get("pbk", "")
+    sid = params.get("sid", "")
+    spx = params.get("spx", "")
     if security == "reality" and not pbk:
         logging.warning(
             f"REALITY config '{common['display_tag']}' is missing public key (pbk). Skipping."
@@ -232,6 +237,8 @@ def _parse_trojan(
         network=network_type,
         security=security,
         pbk=pbk,
+        sid=sid,
+        spx=spx,
         fp=params.get("fp", ""),
         header_type=params.get("headerType", "none"),
         host=host,
@@ -260,6 +267,7 @@ def _parse_vmess(
     try:
         encoded_part = uri.replace("vmess://", "").split("#")[0]
         decoded = json.loads(base64.b64decode(encoded_part + "==").decode("utf-8"))
+        print(f"{decoded.get("pbk", "")} {decoded.get("sid", "")} {decoded.get("spx", "")}")
         display_tag = decoded.get("ps", common["display_tag"])
         common["display_tag"] = display_tag
         common["tag"] = re.sub(r"[^a-zA-Z0-9_.-]", "_", display_tag) or "proxy"
@@ -357,7 +365,6 @@ def _parse_hysteria(
     )
 
 
-# (XrayConfigBuilder and other functions remain unchanged)
 class XrayConfigBuilder:
     def __init__(self):
         self.config: Dict[str, Any] = {
@@ -376,7 +383,7 @@ class XrayConfigBuilder:
             "outbounds": [],
             "routing": {"rules": []},
         }
-        self.warp_outbound_tag: Optional[str] = None
+        # self.warp_outbound_tag: Optional[str] = None
 
     def add_inbound(self, inbound_config: Dict[str, Any]):
         self.config["inbounds"].append(inbound_config)
@@ -412,10 +419,10 @@ class XrayConfigBuilder:
         }
         if params.protocol == "mvless" and params.mux_enabled:
             outbound["mux"] = {"enabled": True, "concurrency": params.mux_concurrency}
-        if self.warp_outbound_tag and params.tag != self.warp_outbound_tag:
-            outbound.setdefault("streamSettings", {}).setdefault("sockopt", {})[
-                "dialerProxy"
-            ] = self.warp_outbound_tag
+        # if self.warp_outbound_tag and params.tag != self.warp_outbound_tag:
+        #     outbound.setdefault("streamSettings", {}).setdefault("sockopt", {})[
+        #         "dialerProxy"
+        #     ] = self.warp_outbound_tag
         return self._remove_empty_values(outbound)
 
     def to_json(self, indent: int = 2) -> str:
@@ -581,9 +588,9 @@ class XrayConfigBuilder:
             }
         elif protocol == "socks":
             server = {"address": params.address, "port": params.port, "level": level}
-        if params.id:
-            server["users"] = [{"user": params.id, "pass": params.password or ""}]
-        return {"servers": [server]}
+            if params.id:
+                server["users"] = [{"user": params.id, "pass": params.password or ""}]
+            return {"servers": [server]}
         return {}
 
     def _remove_empty_values(self, data: Any) -> Any:

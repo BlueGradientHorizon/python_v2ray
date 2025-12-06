@@ -21,7 +21,7 @@ This library abstracts the complexities of binary management, multi-format confi
 -   **Unified Config Parser**: Seamlessly parses various link formats (`vless`, `vmess`, `trojan`, `ss`, `hysteria2`, `mvless`) into a standardized Python object model.
 -   **High-Speed Concurrent Testing**: Utilizes a hybrid architecture (Python + Go) to test dozens of configurations simultaneously, reporting latency, download, and upload speeds in seconds.
 -   **Dynamic Config Builder**: A fluent builder API to programmatically construct complex Xray JSON configurations with custom inbounds, outbounds, and routing rules.
--   **Advanced Proxy Chaining ("WARP on Any")**: Easily route any configuration's traffic (VLESS, Trojan, even another WireGuard) through a final WARP outbound for enhanced privacy and connectivity.
+-   ~~**Advanced Proxy Chaining ("WARP on Any")**: Easily route any configuration's traffic (VLESS, Trojan, even another WireGuard) through a final WARP outbound for enhanced privacy and connectivity.~~
 -   **Live Statistics**: Connect to a running Xray-core instance's gRPC API to fetch live traffic statistics (uplink & downlink).
 -   **Cross-Platform**: Designed to work flawlessly across Windows, macOS, and Linux environments.
 

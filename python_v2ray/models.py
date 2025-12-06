@@ -1,6 +1,6 @@
 # python_v2ray/models.py
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 
 # note: We'll use dataclasses to create structured, type-hinted models.
 # note: This makes the code much cleaner and easier to work with.
