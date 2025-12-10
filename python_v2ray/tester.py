@@ -1,20 +1,28 @@
-import subprocess, json, os, sys, time, logging, socket
+import sys
+import time
+import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Generator
-
-from python_v2ray.process_manager import BaseProcessManager
-
-# // from .speed_tester import SpeedTester
-from .hysteria_core import HysteriaCore
-from .xray_core import XrayCore
-from .config_parser import ConfigParams, XrayConfigBuilder
+from typing import List, Generator, Optional, cast
 from contextlib import contextmanager
-from concurrent.futures import (
-    ThreadPoolExecutor,
-    as_completed,
-    TimeoutError as FuturesTimeoutError,
+
+from python_v2ray import engine
+from .xray_config_builder import XrayConfigBuilder
+from python_v2ray.engine import (
+    DownloadSpeedTask,
+    DownloadTaskResult,
+    EngineTask,
+    LatencyTask,
+    LatencyTaskResult,
+    LatencyTaskSettings,
+    TaskResult,
+    UploadSpeedTask,
+    UploadTaskResult,
 )
-import functools
+from python_v2ray.process_manager import ProxyClientProcessManager
+
+from .hysteria import HysteriaClient
+from .xray_core import XrayCoreClient
+from .profile_parser import ProxyProfile
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(message)s"
@@ -23,49 +31,37 @@ logging.basicConfig(
 
 @contextmanager
 def manage_proxies(
-    self: "ConnectionTester", parsed_params: List[ConfigParams], **kwargs
-) -> Generator[List[Dict[str, Any]], None, None]:
+    self: "ConnectionTester", tasks: List[EngineTask], **kwargs
+) -> Generator[List[EngineTask], None, None]:
     """
     A context manager that manages the lifecycle of proxy processes (Xray, Hysteria)
     for a block of code. It handles setup, teardown, and yields a list of
-    proxy jobs to the wrapped function.
+    proxy tasks to the wrapped function.
     """
-    if not parsed_params:
+    if not tasks:
         yield []
         return
     logging.info(f"Orchestrating proxies...")
-    base_port = 20800
-    jobs_to_run: object = []
-    proxies_to_manage: list[BaseProcessManager] = []
-    xray_params_to_merge: list[tuple[ConfigParams, int]] = []
-    # warp_config = kwargs.get("warp_config")
+    proxies_to_manage: list[ProxyClientProcessManager] = []
+    xray_params_to_merge: list[tuple[ProxyProfile, int]] = []
     debug_mode = kwargs.get("debug_mode", False)
-    
-    for i, params in enumerate(parsed_params):
-        local_port = base_port + i
-        jobs_to_run.append(
-            {
-                "params": params,
-                "local_port": local_port,
-                "tag": params.display_tag,
-                "listen_ip": "127.0.0.1",
-            }
-        )
-        if params.protocol in ["hysteria", "hysteria2", "hy2"]:
+
+    for i, task in enumerate(tasks):
+        if task.profile.protocol in ["hysteria", "hysteria2", "hy2"]:
             proxies_to_manage.append(
-                HysteriaCore(str(self.vendor_path), params, local_port=local_port)
+                HysteriaClient(
+                    str(self.vendor_path),
+                    task.profile,
+                    local_port=task.port,
+                    debug_mode=debug_mode,
+                )
             )
         else:
-            xray_params_to_merge.append((params, local_port))
+            xray_params_to_merge.append((task.profile, task.port))
 
     if xray_params_to_merge:
         builder = XrayConfigBuilder()
-        # if warp_config:
-        #     logging.info(
-        #         f"Enabling WARP-on-Any mode with config: {warp_config.tag}"
-        #     )
-        #     builder.add_warp_outbound(warp_config)
-        for i, (params, local_port) in enumerate(xray_params_to_merge):
+        for i, (task, local_port) in enumerate(xray_params_to_merge):
             internal_xray_outbound_tag = f"proxy_out_xray_{i}"
             builder.add_inbound(
                 {
@@ -77,7 +73,7 @@ def manage_proxies(
                 }
             )
             outbound = builder.build_outbound_from_params(
-                params, explicit_tag=internal_xray_outbound_tag
+                task, explicit_tag=internal_xray_outbound_tag
             )
             if outbound:
                 builder.add_outbound(outbound)
@@ -90,49 +86,21 @@ def manage_proxies(
                 )
             else:
                 logging.warning(
-                    f"Skipping Xray outbound for protocol '{params.protocol}' and tag '{params.tag}' (not supported or failed to build)."
+                    f"Skipping Xray outbound for protocol '{task.protocol}' and tag '{task.tag}' (not supported or failed to build)."
                 )
         builder.add_outbound({"protocol": "freedom", "tag": "direct"})
         builder.add_outbound({"protocol": "blackhole", "tag": "block"})
         proxies_to_manage.append(
-            XrayCore(str(self.vendor_path), builder, debug_mode=debug_mode)
+            XrayCoreClient(str(self.vendor_path), builder, debug_mode=debug_mode)
         )
-    
+
     try:
         logging.info(f"Starting {len(proxies_to_manage)} proxy manager(s)...")
         for proxy in proxies_to_manage:
             proxy.start()
-        logging.info("Waiting for proxy servers to become ready...")
-        expected_ports = {job["local_port"] for job in jobs_to_run}
-        ready_ports = set()
-        max_wait_attempts = 40
-        for attempt in range(max_wait_attempts):
-            all_expected_ports_ready = True
-            ports_to_check_in_this_attempt = expected_ports - ready_ports
-            if not ports_to_check_in_this_attempt:
-                break
-            for port in ports_to_check_in_this_attempt:
-                try:
-                    with socket.create_connection(
-                        ("127.0.0.1", port), timeout=0.25
-                    ):
-                        ready_ports.add(port)
-                except (socket.timeout, ConnectionRefusedError):
-                    all_expected_ports_ready = False
-                    break
-            if all_expected_ports_ready and len(ready_ports) == len(expected_ports):
-                logging.info(
-                    f"All {len(expected_ports)} proxy SOCKS ports are ready after {attempt+1} attempts."
-                )
-                break
-            time.sleep(0.25)
-        else:
-            logging.warning(
-                f"Timeout: Not all proxy SOCKS ports became ready. {len(ready_ports)}/{len(expected_ports)} ports ready."
-            )
 
-        yield jobs_to_run
-    
+        yield tasks
+
     finally:
         logging.info("Stopping all proxy managers...")
         for proxy in reversed(proxies_to_manage):
@@ -164,155 +132,131 @@ class ConnectionTester:
         if not (self.core_engine_path / self.tester_exe).is_file():
             raise FileNotFoundError("Tester executable not found")
 
-    def test_uris(
+    def test_latency(
         self,
-        parsed_params: List[ConfigParams],
-        timeout: int = 10,
+        profiles: List[ProxyProfile],
+        ip: str = "127.0.0.1",
+        base_port: int = 20800,
+        task_timeout: float = 10,
+        test_timeout: Optional[float] = None,
         ping_url: str = "http://www.google.com/generate_204",
+        max_workers: Optional[int] = None,
+        settings: LatencyTaskSettings = LatencyTaskSettings(),
         **kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[LatencyTaskResult]:
         """
         * Takes a list of PRE-PARSED ConfigParams objects and tests them using the correct client.
         * This version is robust against failing individual configs and duplicate tags.
         * It now leverages the manage_proxies context manager to handle Xray/Hysteria lifecycle.
         """
-        # The logic that was inside the 'wrapper' function of the decorator is now directly here.
-        with manage_proxies(self, parsed_params, **kwargs) as jobs_to_run:
-            if not jobs_to_run:
+        tasks = []
+        for i, prof in enumerate(profiles):
+            tasks.append(
+                LatencyTask(prof, ip, base_port + i, task_timeout, ping_url, settings)
+            )
+        with manage_proxies(self, tasks, **kwargs) as tasks_to_run:
+            if not tasks_to_run:
                 return []
-            go_tester_payload = []
-            for job in jobs_to_run:
-                params = job["params"]
-                if params.protocol in ["hysteria", "hysteria2", "hy2"]:
-                    go_tester_payload.append(
-                        {
-                            "tag": job["tag"],
-                            "protocol": "hysteria2",
-                            "config_uri": f"{params.protocol}://{params.hy2_password}@{params.address}:{params.port}?sni={params.sni}",
-                            "listen_ip": job["listen_ip"],
-                            "test_port": job["local_port"],
-                            "client_path": str(self.vendor_path / self.hysteria_exe),
-                            "ping_url": ping_url,
-                        }
-                    )
-                else:
-                    go_tester_payload.append(
-                        {
-                            "tag": job["tag"],
-                            "listen_ip": job["listen_ip"],
-                            "test_port": job["local_port"],
-                            "ping_url": ping_url,
-                        }
-                    )
-            logging.info(f"Sending {len(go_tester_payload)} test jobs to Go engine...")
-            all_results = self._run_go_tester(go_tester_payload, timeout)
-            return all_results
+            logging.info(f"Running {len(tasks_to_run)} latency tasks...")
+            return cast(
+                List[LatencyTaskResult],
+                self._run_tasks(tasks_to_run, test_timeout, max_workers),
+            )
 
-    def test_speed(
-        self, parsed_params: List[ConfigParams], **kwargs
-    ) -> List[Dict[str, Any]]:
-        download_bytes = kwargs.get("download_bytes", 10000000)
-        download_url = kwargs.get("download_url", "https://speed.cloudflare.com/__down")
-        timeout = kwargs.get("timeout", 60)
+    def test_download(
+        self,
+        profiles: List[ProxyProfile],
+        ip: str = "127.0.0.1",
+        base_port: int = 20800,
+        task_timeout: float = 60,
+        test_timeout: Optional[float] = None,
+        download_url: str = "https://speed.cloudflare.com/__down",
+        target_bytes: int = 10 * 1024 * 1024,
+        max_workers: Optional[int] = None,
+        **kwargs,
+    ) -> List[DownloadTaskResult]:
+        tasks = []
+        for i, prof in enumerate(profiles):
+            tasks.append(
+                DownloadSpeedTask(
+                    prof,
+                    ip,
+                    base_port + i,
+                    task_timeout,
+                    download_url,
+                    target_bytes,
+                )
+            )
 
-        with manage_proxies(self, parsed_params, **kwargs) as jobs:
-            if not jobs:
-                return []
-            go_jobs = [
-                {
-                    "tag": job["params"].tag,
-                    "listen_ip": "127.0.0.1",
-                    "test_port": job["local_port"],
-                    "download_url": download_url,
-                    "download_bytes": download_bytes,
-                }
-                for job in jobs
-            ]
-            logging.info("Delegating download speed tests to Go engine...")
-            return self._run_go_tester(go_jobs, timeout=timeout)
+        with manage_proxies(self, tasks, **kwargs) as tasks_to_run:
+            logging.info(f"Running {len(tasks_to_run)} download speed tests...")
+            r = self._run_tasks(tasks_to_run, test_timeout, max_workers)
+            return cast(List[DownloadTaskResult], r)
 
     def test_upload(
-        self, parsed_params: List[ConfigParams], **kwargs
-    ) -> List[Dict[str, Any]]:
-        upload_bytes = kwargs.get("upload_bytes", 5000000)
-        upload_url = kwargs.get("upload_url", "https://speed.cloudflare.com/__up")
-        timeout = kwargs.get("timeout", 60)
-
-        with manage_proxies(self, parsed_params, **kwargs) as jobs:
-            if not jobs:
-                return []
-            go_jobs = [
-                {
-                    "tag": job["params"].tag,
-                    "listen_ip": "127.0.0.1",
-                    "test_port": job["local_port"],
-                    "upload_url": upload_url,
-                    "upload_bytes": upload_bytes,
-                }
-                for job in jobs
-            ]
-            logging.info("Delegating upload speed tests to Go engine...")
-            return self._run_go_tester(go_jobs, timeout=timeout)
-
-    def _run_go_tester(
-        self, payload: List[Dict[str, Any]], timeout: int = 30
-    ) -> List[Dict[str, Any]]:
-        if not payload:
-            return []
-        input_json = json.dumps(payload)
-        process = None
-        try:
-            tester_exe_path = str(self.core_engine_path / self.tester_exe)
-            with subprocess.Popen(
-                [tester_exe_path],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-            ) as process:
-                stdout, stderr = process.communicate(input=input_json, timeout=timeout)
-                if stderr:
-                    logging.error(f"Go engine error log:\n{stderr}")
-                if process.returncode != 0:
-                    logging.error(
-                        f"Go engine exited with non-zero code: {process.returncode}"
-                    )
-                    return []
-                return json.loads(stdout) if stdout else []
-        except FuturesTimeoutError:
-            logging.error(
-                f"Go engine timed out after {timeout} seconds. Terminating process."
+        self,
+        profiles: List[ProxyProfile],
+        ip: str = "127.0.0.1",
+        base_port: int = 20800,
+        task_timeout: float = 60,
+        test_timeout: Optional[float] = None,
+        upload_url: str = "https://speed.cloudflare.com/__up",
+        target_bytes: int = 10 * 1024 * 1024,
+        max_workers: Optional[int] = None,
+        **kwargs,
+    ) -> List[UploadTaskResult]:
+        tasks = []
+        for i, prof in enumerate(profiles):
+            tasks.append(
+                UploadSpeedTask(
+                    prof,
+                    ip,
+                    base_port + i,
+                    task_timeout,
+                    upload_url,
+                    target_bytes,
+                )
             )
-            if process:
-                process.kill()
-                _, stderr = process.communicate()
-                if stderr:
-                    logging.error(f"Go engine error log (on timeout):\n{stderr}")
+
+        with manage_proxies(self, tasks, **kwargs) as tasks_to_run:
+            logging.info(f"Running {len(tasks_to_run)} upload speed tests...")
+            r = self._run_tasks(tasks_to_run, test_timeout, max_workers)
+            return cast(List[UploadTaskResult], r)
+
+    def _run_tasks(
+        self,
+        tasks: List[EngineTask],
+        test_timeout: Optional[float],
+        max_workers: Optional[int],
+    ) -> List[TaskResult]:
+        start = time.time()
+        if not tasks:
             return []
+        try:
+            results = engine.execute_tasks(tasks, test_timeout, max_workers)
+            print(f"time: {time.time()-start}")
+            return results
         except Exception as e:
-            logging.error(f"An error occurred while running the Go tester: {e}")
-            if process and process.poll() is None:
-                process.kill()
+            logging.error(f"An error occurred while running the network tester: {e}")
             return []
 
     def _test_individual_clients(
         self,
-        params_list: List[ConfigParams],
+        profiles: List[ProxyProfile],
         client_exe: str,
         protocol_name: str,
         timeout: int,
         ping_url: str,
-    ) -> List[Dict[str, Any]]:
-        test_jobs = []
+    ) -> List[TaskResult]:
+        test_tasks = []
         base_port = 30800
         ip_counter = 2
-        for i, params in enumerate(params_list):
-            test_jobs.append(
+        for i, prof in enumerate(profiles):
+            test_tasks.append(
                 {
-                    "tag": params.tag,
+                    "tag": prof.display_tag,
                     "protocol": protocol_name,
-                    "config_uri": f"{params.protocol}://{params.hy2_password}@{params.address}:{params.port}?sni={params.sni}",
+                    "config_uri": f"{prof.protocol}://{prof.hy2_password}@{prof.address}:{prof.port}?sni={prof.sni}",
                     "listen_ip": f"127.0.0.{ip_counter}",
                     "test_port": base_port + i,
                     "client_path": str(self.vendor_path / client_exe),
@@ -320,4 +264,4 @@ class ConnectionTester:
                 }
             )
             ip_counter += 1
-        return self._run_go_tester(test_jobs, timeout)
+        return self._run_tasks(test_tasks, timeout, None)

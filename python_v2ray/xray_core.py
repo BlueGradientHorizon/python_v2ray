@@ -1,16 +1,17 @@
+import re
 import sys
 import tempfile
-from typing import List
+from typing import List, Optional
 import logging
 
-from .config_parser import XrayConfigBuilder
-from .process_manager import BaseProcessManager
+from .xray_config_builder import XrayConfigBuilder
+from .process_manager import ProxyClientProcessManager
 
 # NOTE: api_client import is no longer needed here if get_stats is removed or refactored
 # // from .api_client import XrayApiClient
 
 
-class XrayCore(BaseProcessManager):
+class XrayCoreClient(ProxyClientProcessManager):
     """
     Manages the Xray-core process by inheriting from BaseProcessManager.
     It implements the Xray-specific logic for configuration and startup.
@@ -22,11 +23,13 @@ class XrayCore(BaseProcessManager):
         config_builder: XrayConfigBuilder,
         debug_mode: bool = False,
     ):
-        super().__init__(vendor_path)
+        super().__init__(vendor_path, "Xray-core", debug_mode)
         self.config_builder = config_builder
-        self.debug_mode = debug_mode
         # self.api_port = api_port #! This logic can be refactored if needed
         # // self._api_client = None
+
+    def _get_start_pattern(self) -> Optional[re.Pattern]:
+        return re.compile(r".*core: Xray .* started")
 
     def _get_executable_name(self) -> str:
         if sys.platform == "win32":
@@ -45,13 +48,6 @@ class XrayCore(BaseProcessManager):
         ) as f:
             f.write(self.config_builder.to_json())
             self._config_file_path = f.name
-        logging.info(f"Temporary Xray config created at: {self._config_file_path}")
-
-    def _cleanup_config(self) -> None:
-        """Overrides cleanup to respect debug_mode."""
-        if self.debug_mode:
-            logging.info(
-                f"[DEBUG MODE] Xray temporary config file kept at: {self._config_file_path}"
-            )
-            return
-        super()._cleanup_config()
+        logging.info(
+            f"Temporary {self.display_name} config created at: {self._config_file_path}"
+        )

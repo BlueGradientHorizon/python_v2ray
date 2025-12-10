@@ -1,23 +1,32 @@
 import json
-import os
+import re
 import sys
-from typing import List
+from typing import List, Optional
 import logging
 
-from .config_parser import ConfigParams
-from .process_manager import BaseProcessManager
+from .profile_parser import ProxyProfile
+from .process_manager import ProxyClientProcessManager
 
 
-class HysteriaCore(BaseProcessManager):
+class HysteriaClient(ProxyClientProcessManager):
     """
     Manages a standalone Hysteria client process by inheriting from BaseProcessManager.
     """
 
-    def __init__(self, vendor_path: str, params: ConfigParams, local_port: int = 10809, debug_mode: bool = False):
-        super().__init__(vendor_path)
+    def __init__(
+        self,
+        vendor_path: str,
+        params: ProxyProfile,
+        local_port: int = 10809,
+        debug_mode: bool = False,
+    ):
+        super().__init__(vendor_path, "Hysteria", debug_mode)
         self.params = params
         self.local_port = local_port
         self.debug_mode = debug_mode
+
+    def _get_start_pattern(self) -> Optional[re.Pattern]:
+        return re.compile(r".*connected to server.*")
 
     def _get_executable_name(self) -> str:
         if sys.platform == "win32":
@@ -47,17 +56,10 @@ class HysteriaCore(BaseProcessManager):
             }
 
         config_path = self.vendor_path / "hysteria_config.json"
-        with open(config_path, "w", encoding='utf-8') as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
         self._config_file_path = str(config_path)
-        logging.info(f"Temporary Hysteria config created at: {self._config_file_path}")
-
-    def _cleanup_config(self) -> None:
-        """Overrides cleanup to respect debug_mode."""
-        if self.debug_mode:
-            logging.info(
-                f"[DEBUG MODE] Hysteria temporary config file kept at: {self._config_file_path}"
-            )
-            return
-        super()._cleanup_config()
+        logging.info(
+            f"Temporary {self.display_name} config created at: {self._config_file_path}"
+        )

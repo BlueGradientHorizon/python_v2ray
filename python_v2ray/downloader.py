@@ -1,8 +1,12 @@
-# python_v2ray/downloader.py
-
-import requests, sys, os, zipfile, io, platform
+import sys
+import os
+import zipfile
+import io
+import platform
 from pathlib import Path
 from typing import Optional
+
+import requests
 
 XRAY_REPO = "GFW-knocker/Xray-core"
 OWN_REPO = "arshiacomplus/python_v2ray"
@@ -70,7 +74,6 @@ class BinaryDownloader:
 
         target_file = target_dir / exe_name
 
-
         if target_file.is_file():
             print(f"* Binary '{exe_name}' already exists.")
             return True
@@ -78,7 +81,9 @@ class BinaryDownloader:
         print(f"! Binary '{exe_name}' not found. Downloading from '{repo}'...")
         try:
             if name == "hysteria":
-                release_url = f"https://api.github.com/repos/{repo}/releases/tags/app%2Fv2.6.2"
+                release_url = (
+                    f"https://api.github.com/repos/{repo}/releases/tags/app%2Fv2.6.2"
+                )
             else:
                 release_url = f"https://api.github.com/repos/{repo}/releases/latest"
 
@@ -110,9 +115,13 @@ class BinaryDownloader:
                             break
 
                     if not member_to_extract:
-                        raise FileNotFoundError(f"Could not find executable for '{name}' inside the zip file.")
+                        raise FileNotFoundError(
+                            f"Could not find executable for '{name}' inside the zip file."
+                        )
 
-                    with z.open(member_to_extract) as source, open(target_file, "wb") as target:
+                    with z.open(member_to_extract) as source, open(
+                        target_file, "wb"
+                    ) as target:
                         target.write(source.read())
 
                     for dat_file in ["geoip.dat", "geosite.dat"]:
@@ -122,7 +131,7 @@ class BinaryDownloader:
                             ) as target_dat:
                                 target_dat.write(source_dat.read())
 
-            print(f"* Successfully downloaded and saved as '{exe_name}'.") 
+            print(f"* Successfully downloaded and saved as '{exe_name}'.")
             if sys.platform != "win32":
                 os.chmod(target_file, 0o755)
             return True
@@ -130,6 +139,7 @@ class BinaryDownloader:
         except Exception as e:
             print(f"! ERROR during download/extraction for '{name}': {e}")
             return False
+
     def ensure_all(self):
         print("--- Checking for necessary binaries & databases ---")
         self.vendor_path.mkdir(exist_ok=True)

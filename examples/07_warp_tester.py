@@ -56,10 +56,10 @@
 #         print("\n! No valid WARP configuration found.")
 #         print("! Please edit the 'warp_uri' variable with a real WireGuard config.")
 #         return
-    
+
 #     # Filter out placeholder URIs for the main test configs
 #     real_test_configs = [p for p in parsed_test_configs if "YOUR_" not in p.id and "your.domain.com" not in p.address and "another.domain.com" not in p.address]
-    
+
 #     if not real_test_configs:
 #         print("\n! No valid primary configurations found to test.")
 #         print("! Please edit the 'test_uris' list with your real configurations.")

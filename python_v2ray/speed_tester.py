@@ -1,7 +1,7 @@
-import requests
 import time
 import logging
-from typing import Dict, Optional
+from typing import Dict
+import requests
 
 
 class SpeedTester:

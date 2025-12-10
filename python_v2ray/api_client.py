@@ -64,5 +64,6 @@ class XrayApiClient:
                     "uplink": 0,
                     "downlink": 0,
                 }  # Return 0 if the stat entry doesn't exist yet
-            print(f"! gRPC Error while getting stats for tag '{tag}': {e.details()}")
+            print(
+                f"! gRPC Error while getting stats for tag '{tag}': {e.details()}")
             return None
