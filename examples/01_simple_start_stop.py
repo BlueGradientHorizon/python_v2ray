@@ -9,7 +9,7 @@ import sys
 # * It adds the parent directory (the project root) to Python's path.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from python_v2ray.xray_core import XrayCoreClient
+from python_v2ray.xray_core_process import XrayCoreProcess
 from python_v2ray.xray_config_builder import XrayConfigBuilder
 
 
@@ -56,7 +56,7 @@ def main():
         # Create an instance of our core controller.
         # XrayCore now takes `vendor_path` and a `config_builder` instance.
         # The `executable_path` and `config_path` arguments are no longer used here.
-        with XrayCoreClient(
+        with XrayCoreProcess(
             vendor_path=vendor_path, config_builder=builder, debug_mode=False
         ) as xray:
             if xray.is_running():

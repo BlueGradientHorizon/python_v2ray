@@ -2,11 +2,16 @@ import sys
 import time
 import logging
 from pathlib import Path
-from typing import List, Generator, Optional, cast
+from typing import Callable, List, Generator, Optional, cast
 from contextlib import contextmanager
 
 from python_v2ray import engine
-from .xray_config_builder import XrayConfigBuilder
+from python_v2ray.adapters import KNOWN_ADAPTERS
+from python_v2ray.adapters.base import (
+    BaseProxyAdapter,
+    BatchableProxyAdapter,
+    NonBatchableProxyAdapter,
+)
 from python_v2ray.engine import (
     DownloadSpeedTask,
     DownloadTaskResult,
@@ -18,10 +23,6 @@ from python_v2ray.engine import (
     UploadSpeedTask,
     UploadTaskResult,
 )
-from python_v2ray.process_manager import ProxyClientProcessManager
-
-from .hysteria import HysteriaClient
-from .xray_core import XrayCoreClient
 from .profile_parser import ProxyProfile
 
 logging.basicConfig(
@@ -42,69 +43,63 @@ def manage_proxies(
         yield []
         return
     logging.info(f"Orchestrating proxies...")
-    proxies_to_manage: list[ProxyClientProcessManager] = []
-    xray_params_to_merge: list[tuple[ProxyProfile, int]] = []
     debug_mode = kwargs.get("debug_mode", False)
 
-    for i, task in enumerate(tasks):
-        if task.profile.protocol in ["hysteria", "hysteria2", "hy2"]:
-            proxies_to_manage.append(
-                HysteriaClient(
-                    str(self.vendor_path),
-                    task.profile,
-                    local_port=task.port,
-                    debug_mode=debug_mode,
-                )
-            )
-        else:
-            xray_params_to_merge.append((task.profile, task.port))
+    batchable_tasks: dict[type[BatchableProxyAdapter], list[EngineTask]] = {}
+    nonbatchable_tasks: list[tuple[type[NonBatchableProxyAdapter], EngineTask]] = []
 
-    if xray_params_to_merge:
-        builder = XrayConfigBuilder()
-        for i, (task, local_port) in enumerate(xray_params_to_merge):
-            internal_xray_outbound_tag = f"proxy_out_xray_{i}"
-            builder.add_inbound(
-                {
-                    "tag": f"inbound-{local_port}",
-                    "port": local_port,
-                    "listen": "127.0.0.1",
-                    "protocol": "socks",
-                    "settings": {"auth": "noauth", "udp": True},
-                }
+    adapters: list[BaseProxyAdapter] = []
+
+    for task in tasks:
+        if task.profile.outbound_config is None:
+            logging.warning(
+                f"Skipping outbound configuration for protocol '{task.profile.protocol}' and inbound port {task.port}."
             )
-            outbound = builder.build_outbound_from_params(
-                task, explicit_tag=internal_xray_outbound_tag
-            )
-            if outbound:
-                builder.add_outbound(outbound)
-                builder.config["routing"]["rules"].append(
-                    {
-                        "type": "field",
-                        "inboundTag": [f"inbound-{local_port}"],
-                        "outboundTag": outbound["tag"],
-                    }
-                )
-            else:
-                logging.warning(
-                    f"Skipping Xray outbound for protocol '{task.protocol}' and tag '{task.tag}' (not supported or failed to build)."
-                )
-        builder.add_outbound({"protocol": "freedom", "tag": "direct"})
-        builder.add_outbound({"protocol": "blackhole", "tag": "block"})
-        proxies_to_manage.append(
-            XrayCoreClient(str(self.vendor_path), builder, debug_mode=debug_mode)
-        )
+            continue
+        config_type = type(task.profile.outbound_config)
+        adapter_type = None
+        for known_adapter_type in KNOWN_ADAPTERS:
+            if known_adapter_type.CONFIG_TYPE != config_type:
+                continue
+            adapter_type = known_adapter_type
+        if adapter_type is None:
+            print("unknown adapter")
+            continue
+        match adapter_type:
+            case _ if issubclass(adapter_type, BatchableProxyAdapter):
+                if batchable_tasks.get(adapter_type) is None:
+                    batchable_tasks[adapter_type] = []
+                batchable_tasks[adapter_type].append(task)
+            case _ if issubclass(adapter_type, NonBatchableProxyAdapter):
+                nonbatchable_tasks.append((adapter_type, task))
+            case _:
+                print("unknown adapter")
+
+    for known_adapter_type, batch_tasks in batchable_tasks.items():
+        adapter = known_adapter_type()
+        adapter.add_default_config()
+        for task in batch_tasks:
+            i_tag = adapter.add_inbound(task.ip, task.port)
+            o_tag = adapter.add_outbound(task.port, task.profile.outbound_config)
+            adapter.add_rule(i_tag, o_tag)
+        adapters.append(adapter)
+
+    for known_adapter_type, task in nonbatchable_tasks:
+        known_adapter_type = known_adapter_type()
+        known_adapter_type.set_config(task.ip, task.port, task.profile.outbound_config)
+        adapters.append(known_adapter_type)
 
     try:
-        logging.info(f"Starting {len(proxies_to_manage)} proxy manager(s)...")
-        for proxy in proxies_to_manage:
-            proxy.start()
+        logging.info(f"Starting {len(adapters)} proxy manager(s)...")
+        for adapter in adapters:
+            adapter.start(str(self.vendor_path), debug_mode)
 
         yield tasks
 
     finally:
         logging.info("Stopping all proxy managers...")
-        for proxy in reversed(proxies_to_manage):
-            proxy.stop()
+        for adapter in adapters:
+            adapter.stop()
 
 
 class ConnectionTester:
@@ -142,6 +137,7 @@ class ConnectionTester:
         ping_url: str = "http://www.google.com/generate_204",
         max_workers: Optional[int] = None,
         settings: LatencyTaskSettings = LatencyTaskSettings(),
+        on_result: Optional[Callable[[TaskResult], None]] = None,
         **kwargs,
     ) -> List[LatencyTaskResult]:
         """
@@ -160,7 +156,7 @@ class ConnectionTester:
             logging.info(f"Running {len(tasks_to_run)} latency tasks...")
             return cast(
                 List[LatencyTaskResult],
-                self._run_tasks(tasks_to_run, test_timeout, max_workers),
+                self._run_tasks(tasks_to_run, test_timeout, max_workers, on_result),
             )
 
     def test_download(
@@ -173,6 +169,7 @@ class ConnectionTester:
         download_url: str = "https://speed.cloudflare.com/__down",
         target_bytes: int = 10 * 1024 * 1024,
         max_workers: Optional[int] = None,
+        on_result: Optional[Callable[[TaskResult], None]] = None,
         **kwargs,
     ) -> List[DownloadTaskResult]:
         tasks = []
@@ -190,7 +187,7 @@ class ConnectionTester:
 
         with manage_proxies(self, tasks, **kwargs) as tasks_to_run:
             logging.info(f"Running {len(tasks_to_run)} download speed tests...")
-            r = self._run_tasks(tasks_to_run, test_timeout, max_workers)
+            r = self._run_tasks(tasks_to_run, test_timeout, max_workers, on_result)
             return cast(List[DownloadTaskResult], r)
 
     def test_upload(
@@ -203,6 +200,7 @@ class ConnectionTester:
         upload_url: str = "https://speed.cloudflare.com/__up",
         target_bytes: int = 10 * 1024 * 1024,
         max_workers: Optional[int] = None,
+        on_result: Optional[Callable[[TaskResult], None]] = None,
         **kwargs,
     ) -> List[UploadTaskResult]:
         tasks = []
@@ -220,7 +218,7 @@ class ConnectionTester:
 
         with manage_proxies(self, tasks, **kwargs) as tasks_to_run:
             logging.info(f"Running {len(tasks_to_run)} upload speed tests...")
-            r = self._run_tasks(tasks_to_run, test_timeout, max_workers)
+            r = self._run_tasks(tasks_to_run, test_timeout, max_workers, on_result)
             return cast(List[UploadTaskResult], r)
 
     def _run_tasks(
@@ -228,40 +226,41 @@ class ConnectionTester:
         tasks: List[EngineTask],
         test_timeout: Optional[float],
         max_workers: Optional[int],
+        on_result: Optional[Callable[[TaskResult], None]] = None,
     ) -> List[TaskResult]:
         start = time.time()
         if not tasks:
             return []
         try:
-            results = engine.execute_tasks(tasks, test_timeout, max_workers)
+            results = engine.execute_tasks(tasks, test_timeout, max_workers, on_result)
             print(f"time: {time.time()-start}")
             return results
         except Exception as e:
             logging.error(f"An error occurred while running the network tester: {e}")
             return []
 
-    def _test_individual_clients(
-        self,
-        profiles: List[ProxyProfile],
-        client_exe: str,
-        protocol_name: str,
-        timeout: int,
-        ping_url: str,
-    ) -> List[TaskResult]:
-        test_tasks = []
-        base_port = 30800
-        ip_counter = 2
-        for i, prof in enumerate(profiles):
-            test_tasks.append(
-                {
-                    "tag": prof.display_tag,
-                    "protocol": protocol_name,
-                    "config_uri": f"{prof.protocol}://{prof.hy2_password}@{prof.address}:{prof.port}?sni={prof.sni}",
-                    "listen_ip": f"127.0.0.{ip_counter}",
-                    "test_port": base_port + i,
-                    "client_path": str(self.vendor_path / client_exe),
-                    "ping_url": ping_url,
-                }
-            )
-            ip_counter += 1
-        return self._run_tasks(test_tasks, timeout, None)
+    # def _test_individual_clients(
+    #     self,
+    #     profiles: List[ProxyProfile],
+    #     client_exe: str,
+    #     protocol_name: str,
+    #     timeout: int,
+    #     ping_url: str,
+    # ) -> List[TaskResult]:
+    #     test_tasks = []
+    #     base_port = 30800
+    #     ip_counter = 2
+    #     for i, prof in enumerate(profiles):
+    #         test_tasks.append(
+    #             {
+    #                 "tag": prof.display_tag,
+    #                 "protocol": protocol_name,
+    #                 "config_uri": f"{prof.protocol}://{prof.hy2_password}@{prof.address}:{prof.port}?sni={prof.sni}",
+    #                 "listen_ip": f"127.0.0.{ip_counter}",
+    #                 "test_port": base_port + i,
+    #                 "client_path": str(self.vendor_path / client_exe),
+    #                 "ping_url": ping_url,
+    #             }
+    #         )
+    #         ip_counter += 1
+    #     return self._run_tasks(test_tasks, timeout, None)

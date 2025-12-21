@@ -10,11 +10,11 @@ from pathlib import Path  # NEW: Import Path for cleaner path handling
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from python_v2ray.xray_config_builder import XrayConfigBuilder
-from python_v2ray.xray_core import (
-    XrayCoreClient,
+from python_v2ray.xray_core_process import (
+    XrayCoreProcess,
 )  # Keep for XrayCore management in the demo
 from python_v2ray.profile_parser import (
-    parse_uri,
+    parse_profile,
     ProxyProfile,
 )  # NEW: Import ConfigParams
 from python_v2ray.tester import (
@@ -34,7 +34,7 @@ def run_test_with_uri(
     print(f"* Testing URI: {uri[:50]}...")
     print("=" * 60)
 
-    params = parse_uri(uri)
+    params = parse_profile(uri)
     if not params:
         print("! TEST FAILED: Could not parse the URI.")
         return

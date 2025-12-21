@@ -8,8 +8,8 @@ from pathlib import Path  # NEW: Import Path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from python_v2ray.xray_config_builder import XrayConfigBuilder
-from python_v2ray.xray_core import XrayCoreClient
-from python_v2ray.profile_parser import parse_uri
+from python_v2ray.xray_core_process import XrayCoreProcess
+from python_v2ray.profile_parser import parse_profile
 from python_v2ray.api_client import XrayApiClient  # <--- NEW: Import XrayApiClient
 
 
@@ -28,7 +28,7 @@ def main():
         )
         return
 
-    params = parse_uri(vless_uri)
+    params = parse_profile(vless_uri)
     if not params:
         print("! Failed to parse the VLESS URI.")
         return
@@ -88,7 +88,7 @@ def main():
 
     # NEW: XrayCore constructor now takes vendor_path and config_builder
     # debug_mode=True can be useful here to keep the config file for inspection
-    with XrayCoreClient(
+    with XrayCoreProcess(
         vendor_path=str(vendor_path), config_builder=builder, debug_mode=False
     ) as xray:
         if not xray.is_running():

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 import time
 import asyncio
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import aiohttp
 from aiohttp_socks import ProxyConnector
@@ -240,7 +240,9 @@ async def run_latency_test(task: LatencyTask) -> LatencyTaskResult:
                     result.ping_results.append(LatencyTaskPingResult(duration_ms, None))
 
         except Exception as e:
-            result.ping_results.append(LatencyTaskPingResult(None, str(e)))
+            result.ping_results.append(
+                LatencyTaskPingResult(None, str(e.__class__) + str(e))
+            )
             if task.settings.fail_immediately:
                 break
             else:
@@ -283,7 +285,10 @@ async def _run_with_semaphore(
 
 
 def execute_tasks(
-    tasks: List[EngineTask], timeout: Optional[float], max_workers: Optional[int]
+    tasks: List[EngineTask],
+    timeout: Optional[float],
+    max_workers: Optional[int],
+    on_result: Optional[Callable[[TaskResult], None]] = None,
 ) -> List[TaskResult]:
     async def _execute_jobs_async(
         tasks: List[EngineTask], timeout: Optional[float]
@@ -294,13 +299,20 @@ def execute_tasks(
             else nullcontext()
         )
         async_tasks: List[asyncio.Task] = []
-        for task in tasks:
+        for i, task in enumerate(tasks):
             handler = _TASK_MAP.get(type(task))
             if handler:
-                async_tasks.append(
-                    asyncio.create_task(_run_with_semaphore(sem, handler, task))
-                )
+                t = asyncio.create_task(_run_with_semaphore(sem, handler, task))
+                if on_result is not None:
+                    def callback_wrapper(fut: asyncio.Future):
+                        try:
+                            if not fut.cancelled():
+                                on_result(fut.result()) # type: ignore
+                        except Exception:
+                            pass
 
+                    t.add_done_callback(callback_wrapper)
+                async_tasks.append(t)
         done, pending = await asyncio.wait(async_tasks, timeout=timeout)
         results = [d.result() for d in done]
         for p in pending:

@@ -11,7 +11,7 @@ from .process_manager import ProxyClientProcessManager
 # // from .api_client import XrayApiClient
 
 
-class XrayCoreClient(ProxyClientProcessManager):
+class XrayCoreProcess(ProxyClientProcessManager):
     """
     Manages the Xray-core process by inheriting from BaseProcessManager.
     It implements the Xray-specific logic for configuration and startup.

@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from python_v2ray.downloader import BinaryDownloader
 from python_v2ray.tester import ConnectionTester
 from python_v2ray.profile_parser import (
-    parse_uri,
+    parse_profile,
     ProxyProfile,
 )  # NEW: Import ConfigParams
 
@@ -67,13 +67,13 @@ def main():
     custom_fragment_settings = None  # Default: No global Fragment override
 
     print("\n* Parsing all URIs for the upload test...")
-    parsed_configs = [p for p in (parse_uri(uri) for uri in test_uris) if p]
+    parsed_configs = [p for p in (parse_profile(uri) for uri in test_uris) if p]
 
     # Filter out placeholder URIs
     real_configs = [
         p
         for p in parsed_configs
-        if "YOUR_" not in p.id
+        if "YOUR_" not in p.id_
         and "YOUR_" not in getattr(p, "hy2_password", "")
         and "your.domain.com" not in p.address
         and "your.mvless.com" not in p.address
